@@ -165,6 +165,14 @@ __DATA__
 									password: document.getElementById("password").value,
 									email: document.getElementById("to").value}));
 		};
+
+		ws.onclose = function (event)
+		{
+			document.getElementById("main").disabled = true;
+			document.getElementById("input").disabled = true;
+
+			alert("session closed.");
+		};
 	}
 
 	function send_mail (str)
