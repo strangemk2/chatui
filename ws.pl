@@ -1,66 +1,66 @@
 #perl -Iextlib/lib/perl5 ./extlib/bin/morbo ws.pl
-#
+
 use lib "extlib/lib/perl5";
 
 use Mojolicious::Lite;
-#use Mojo::Base 'Mojo::EventEmitter';
 use Data::Dumper;
 
-#my $ee = Mojo::EventEmitter->new;
-
-#my %websockets;
-
-my $mail_sockets = {};
+my $ws_sessions = {};
 
 sub getmail
 {
-	my ($account_info, $mail_address) = @_;
+	my ($account_info, $email) = @_;
 	"say hello.";
 }
 
 sub makemail
 {
-	my ($address, $content) = @_;
+	my ($email, $content) = @_;
 	"fake mail."
 }
 
 sub sendmail
 {
-	my ($account_info, $mail_address, $mailtext) = @_;
+	my ($account_info, $key, $mailtext) = @_;
 
-	my $socket = $mail_sockets->{$mail_address}->{socket};
-	$socket->app->log->debug("mail sent. address: $mail_address .");
+	my $socket = $ws_sessions->{$key}->{socket};
+	$socket->app->log->debug("mail sent. address: $ws_sessions->{$key}->{email} .");
 	1;
 }
 
-websocket '/echo' => sub
+sub search_session
+{
+	my ($email, $session) = @_;
+	my @ret;
+	foreach (keys(%$session))
+	{
+		my $info = $session->{$_};
+		push (@ret, $info) if ($info->{email} eq $email);
+	}
+	@ret;
+}
+
+websocket '/webui' => sub
 {
 	my $self = shift;
-
-	#my $key = $self->tx->handshake->connection;
-	#$websockets{$key} = $self;
 
 	$self->on(json => sub
 		{
 			my ($self, $hash) = @_;
 			if ($hash->{account})
 			{
-				$mail_sockets->{$hash->{email}} = {account => $hash->{account}, socket => $self};
-			}
-			if ($hash->{msg})
-			{
-				$hash->{msg} = "me: $hash->{msg}";
-				#foreach (keys(%websockets))
-				#{
-				#	$websockets{$_}->send({json => $hash});
-				#}
-
-				sendmail(undef, $hash->{email}, makemail(undef, $hash->{msg}));
+				my $key = $self->tx->handshake->connection;
+				$ws_sessions->{$key} = {account => $hash->{account}, email => $hash->{email}, socket => $self};
+				$hash->{session} = $key;
 				$self->send({json => $hash});
-				#$ee->once( mail => sub
-				#	{
-				#		$self->send({json => $hash});
-				#	})
+			}
+			elsif ($hash->{msg})
+			{
+				my $key = $self->tx->handshake->connection;
+				$hash->{msg} = "$ws_sessions->{$key}->{account}: $hash->{msg}";
+
+				sendmail(undef, $key, makemail(undef, $hash->{msg}));
+				$self->send({json => $hash});
 			}
 		}
 	);
@@ -79,8 +79,8 @@ websocket '/echo' => sub
 			Mojo::IOLoop->remove($id);
 
 			# move client session
-			#my $key = $self->tx->handshake->connection;
-			#delete $websockets{$key};
+			my $key = $self->tx->handshake->connection;
+			delete $ws_sessions->{$key};
 
 			# disconnect log
 			my ($self, $code, $reason) = @_;
@@ -88,19 +88,21 @@ websocket '/echo' => sub
 		});
 };
 
-get '/trigger' => sub
+get '/mail_notify' => sub
 {
 	my $self = shift;
-	#$ee->emit(mail => 1);
-	my $mail_address = $self->param('email');
-	my $text = getmail(undef, $mail_address);
 
-	my $socket = $mail_sockets->{$mail_address}->{socket};
+	my $email = $self->param('email');
+	my $text = "$email: " . getmail(undef, $email);
 
-	my $hash = {};
-	$hash->{msg} = "$text";
-	$socket->send({json => $hash});
-	$socket->app->log->debug("mail recieved. address: $mail_address .");
+	my @infos = search_session($email, $ws_sessions);
+	my $json_data = {json => {msg => $text}};
+	foreach (@infos)
+	{
+		my $socket = $_->{socket};
+		$socket->send($json_data);
+		$socket->app->log->debug("mail recieved. address: $email.");
+	}
 
 	$self->render(text => '');
 };
@@ -114,36 +116,73 @@ __DATA__
 <!DOCTYPE html>
 <html>
 <head>
-<title>Echo</title>
+<title>Imap webui mockup</title>
+	from:
+	<input id="from" type=text" size=30>
+	password:
+	<input id="password" type=text" size=30>
+	to:
+	<input id="to" type=text" size=30>
+	<input id="login" type=button value="login" onclick="uilogin()">
+	<br>
 	<textarea id="main" rows=30 cols=50  readonly="readonly"></textarea>
 	<br>
 	<input id="input" type="text" size=50>
 
 %= javascript begin
-	var ws = new WebSocket('<%= url_for('echo')->to_abs %>');
+	var ws;
+	var session_key = '';
 
-	ws.onmessage = function (event) {
-		//document.body.innerHTML += JSON.parse(event.data).msg;
-		var msg = JSON.parse(event.data).msg;
-		if (msg)
+	function uilogin()
+	{
+		document.getElementById("from").disabled = true;
+		document.getElementById("to").disabled = true;
+		document.getElementById("password").disabled = true;
+		document.getElementById("login").disabled = true;
+
+		ws = new WebSocket('<%= url_for('webui')->to_abs %>');
+
+		ws.onmessage = function (event)
 		{
-			var textarea = document.getElementById("main");
-			textarea.value += msg + "\n";
-			main.scrollTop = main.scrollHeight;
-		}
-	};
+			//document.body.innerHTML += JSON.parse(event.data).msg;
+			var s = JSON.parse(event.data).session;
+			if (s)
+			{
+				session_key = s;
+			}
+			var msg = JSON.parse(event.data).msg;
+			if (msg)
+			{
+				var textarea = document.getElementById("main");
+				textarea.value += msg + "\n";
+				main.scrollTop = main.scrollHeight;
+			}
+		};
 
-	ws.onopen = function (event) {
-		ws.send(JSON.stringify({account: 'void', email: 'void@pm525.net'}));
-		//ws.send(JSON.stringify({msg: 'I ♥ Mojolicious!!?'}));
-	};
-
-	function send_mail (str) {
-		ws.send(JSON.stringify({msg: document.getElementById("input").value, email: 'void@pm525.net'}));
-		//if (str) {document.getElementById("main").value += str + "\n"};
+		ws.onopen = function (event)
+		{
+			ws.send(JSON.stringify({account: document.getElementById("from").value,
+									password: document.getElementById("password").value,
+									email: document.getElementById("to").value}));
+		};
 	}
 
-	document.onkeydown = function(e) {
+	function send_mail (str)
+	{
+		if (session_key && ws)
+		{
+			ws.send(JSON.stringify(
+				{msg: document.getElementById("input").value,
+				session: session_key}));
+		}
+		else
+		{
+			alert('No session.');
+		}
+	}
+
+	document.onkeydown = function(e)
+	{
 		var e = e || window.event;
 		if(e.keyCode==13) {
 			send_mail(document.getElementById('input').value);
