@@ -6,6 +6,13 @@ use lib "extlib/lib/perl5";
 
 use Mojolicious::Lite;
 use Data::Dumper;
+use Tiny:Try;
+use MIME::Lite;
+use Net::SMTP;
+
+my $SMTP_SERVER = "127.0.0.1";
+my $SMTP_PORT = 25;
+my $SMTP_IMAP_DEBUG = 0;
 
 my $ws_sessions = {};
 
@@ -15,18 +22,69 @@ sub getmail
 	"say hello.";
 }
 
+# use smtp to send mail
+#
+# < to adreess
+# < func ref for make a mail body
+# < whole data to pass to
+sub cmn_send_mail
+{
+    my ($from, $to, $make_mail_func, $data_ref) = @_;
+
+    try
+    {
+        my $smtp;
+        $smtp = Net::SMTP->new(
+            $SMTP_SERVER,
+            Port        => $SMTP_PORT,
+            Debug       => $SMTP_IMAP_DEBUG,
+        );
+		#$smtp->auth($FROM_MAIL_ADDR, $FROM_MAIL_PASSWORD) || die "smtp auth error";
+        $smtp->mail($from) || die "smtp from error";
+        $smtp->to($to) || die "smtp rcpt error";
+        $smtp->data() || die "data error";
+        $smtp->datasend($make_mail_func->($data_ref)) || die "smtp data error";
+        $smtp->dataend() || die "smtp data error";
+        $smtp->quit || die "smtp quit error";
+
+        1;
+    }
+    catch
+    {
+        print STDERR $_;
+        undef;
+    };
+}
+
 sub makemail
 {
-	my ($email, $content) = @_;
-	"fake mail."
+	my ($email_data) = @_;
+
+	my $msg = MIME::Lite->new (
+        From        => $email_data->{from},
+        To          => $email_data->{to},
+        Subject     => "mail from chatui",
+        Type        => 'text/plain',
+        Encoding    => 'quoted-printable',
+    );
+    $msg->delete('X-Mailer');
+    $msg->attr('content-type.charset' => 'UTF-8');
+	$msg->data($email_data->{body});
+
+	$msg->as_string;
 }
 
 sub sendmail
 {
-	my ($account_info, $key, $mailtext) = @_;
+	my ($account_info, $key, $content) = @_;
+
+	my $from = $ws_sessions->{$key}->{account};
+	my $to = $ws_sessions->{$key}->{email};
+	cmn_send_mail($from, $to, \&makemail, {from => $from, to => $to, body => $content})
 
 	my $socket = $ws_sessions->{$key}->{socket};
 	$socket->app->log->debug("mail sent. address: $ws_sessions->{$key}->{email} .");
+
 	1;
 }
 
