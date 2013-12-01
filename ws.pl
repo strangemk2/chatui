@@ -1,3 +1,5 @@
+#!/usr/bin/perl
+
 #perl -Iextlib/lib/perl5 ./extlib/bin/morbo ws.pl
 
 use lib "extlib/lib/perl5";
@@ -65,7 +67,7 @@ websocket '/webui' => sub
 		}
 	);
 
-	# send data to prevent timeout.
+	# send heartbeats data to prevent timeout.
 	my $id = Mojo::IOLoop->recurring(10 => sub
 		{
 			my (undef, $hash) = @_;
